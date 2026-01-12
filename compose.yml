@@ -1,0 +1,31 @@
+# docker-compose.yml
+version: "3.9"
+services:
+  postgres:
+    build:
+      context: ./tools/postgres_container
+    ports:
+      - "35432:5432"
+    volumes:
+      - ./tools/postgres_container/data:/var/lib/postgresql/data
+      - ./tools/postgres_container/init:/docker-entrypoint-initdb.d
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=agent_store
+      - PGDATA=/var/lib/postgresql/data/pgdata
+  file-transcriber:
+    build:
+      context: ./tools/file_transcriber
+      dockerfile: Dockerfile
+    container_name: youtube-transcribe-mcp
+    ports:
+      - "3333:3333"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DOWNLOAD_DIR: /app/downloads
+    volumes:
+      - ./downloads:/app/downloads
+    depends_on:
+      - postgres
+    restart: unless-stopped

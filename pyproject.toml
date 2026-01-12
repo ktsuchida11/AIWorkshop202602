@@ -1,0 +1,31 @@
+[project]
+name = "aws_llm_agent"
+version = "0.1.0"
+description = "llm anget on aws bedrock"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.1.0",
+    "langchain-openai>=1.1.6",
+    "langchain-aws>=1.1.0",
+    "langchain-core>=1.2.6",
+    "langgraph>=1.0.5",
+    "langgraph-supervisor>=0.0.31",
+    "langgraph-checkpoint>=3.0.1",
+    "langgraph-checkpoint-sqlite",
+    "langgraph-checkpoint-postgres>=3.0.2",
+    "psycopg[binary]",
+    "langchain-tavily>=0.2.15",
+    "langchain-community>=0.4.1",
+    "langchain-mcp-adapters>=0.2.1",
+    "python-dotenv",
+    "boto3",
+    "streamlit",
+    "langfuse>=3.11.2",
+    "langmem>=0.0.30",
+    "deepagents>=0.3.1",
+    "pytest",
+    "pytest-asyncio",
+    "pypdf", # for boj rag
+    "yfinance", # for market_data
+]
