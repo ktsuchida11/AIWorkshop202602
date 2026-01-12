@@ -1,0 +1,20 @@
+{
+  "name": "realtime-front",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "react-scripts build",
+    "start": "serve -s build -l 5173"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "serve": "^14.0.1",
+    "react-scripts": "^5.0.1",
+    "@types/react": "^18.0.28",
+    "@types/react-dom": "^18.0.11"
+  },
+  "main": "src/index.tsx"
+}
