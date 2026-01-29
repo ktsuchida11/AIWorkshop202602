@@ -28,6 +28,9 @@ export default function App() {
     };
   }, []);
 
+  // process.env.PUBLIC_URL は package.json の homepage 設定から "/k-okoshi" を取得します
+  const publicUrl = process.env.PUBLIC_URL || "";
+
   async function start() {
     if (running) return;
 
@@ -84,7 +87,9 @@ export default function App() {
       acRef.current = ac;
 
       // AudioWorklet モジュールのパスを修正
-      await ac.audioWorklet.addModule("/pcm24k-mono-worklet.js");
+      // await ac.audioWorklet.addModule("/pcm24k-mono-worklet.js");
+      // process.env.PUBLIC_URL は package.json の homepage 設定から自動取得されます
+      await ac.audioWorklet.addModule(`${publicUrl}/pcm24k-mono-worklet.js`);
 
       const source = ac.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ac, "pcm24k-mono");
