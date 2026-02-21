@@ -1,0 +1,12 @@
+[project]
+name = "news_search_mcp"
+version = "0.1.0"
+description = "News search MCP server with Google OAuth2.0 authentication"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp",
+    "python-dotenv",
+    "httpx",
+    "newsapi-python>=0.2.7",
+]

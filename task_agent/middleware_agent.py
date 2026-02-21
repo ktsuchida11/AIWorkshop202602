@@ -38,6 +38,8 @@ def detect_ssn(content: str) -> list[dict[str, str | int]]:
     ただし、SSNにはいくつかの制約があり、以下のような番号は無効とされています。
     - 最初の3桁が "000", "666", または "900" から "999" の範囲に
 
+    「私のSSNは 123-45-6789 です。登録をお願いします。」
+
     Returns a list of dictionaries with 'text', 'start', and 'end' keys.
     """
 
@@ -52,6 +54,8 @@ def detect_ssn(content: str) -> list[dict[str, str | int]]:
                 "text": ssn,
                 "start": match.start(),
                 "end": match.end(),
+                "type": "ssn",
+                "value": ssn
             })
     return matches
 
@@ -92,13 +96,13 @@ async def create_middleware_agent(model_id: str = "anthropic"):
     # tool call の制限ミドルウェア
     global_limiter = ToolCallLimitMiddleware(thread_limit=20, run_limit=10)
     search_limiter = ToolCallLimitMiddleware(tool_name="web_search", thread_limit=5, run_limit=3)
-    database_limiter = ToolCallLimitMiddleware(tool_name="query_database", thread_limit=10)
+    # database_limiter = ToolCallLimitMiddleware(tool_name="query_database", thread_limit=10)
 
     agent = create_agent(
             model=model,
             tools=tools,
             system_prompt=system_prompt,
-            checkpointer=InMemorySaver(),
+            checkpointer=InMemorySaver(), # チェックポイントセーバー これがinteruptの動作に必要
             middleware=[
                 HumanInTheLoopMiddleware(
                     interrupt_on={
@@ -135,6 +139,8 @@ async def create_middleware_agent(model_id: str = "anthropic"):
                 email_filter,
                 credit_card_filter,
                 # PII detection method1 正規表現で特定の値を検出した場合にブロックする
+                # 「私の OpenAI API キーは sk-abcdefghijklmnopqrstuvwxyz0123456789 です。これを使って設定を手伝ってください。」
+                # という問い合わせがあった場合にブロックする例
                 PIIMiddleware(
                     "api_key",
                     detector=r"sk-[a-zA-Z0-9]{32}",
@@ -145,7 +151,7 @@ async def create_middleware_agent(model_id: str = "anthropic"):
                 PIIMiddleware(
                     "ssn",
                     detector=detect_ssn,
-                    strategy="mask",
+                    strategy="block",
                     apply_to_input=True
                 ),
                 ModelCallLimitMiddleware(

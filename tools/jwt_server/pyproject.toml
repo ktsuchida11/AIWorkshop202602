@@ -1,0 +1,13 @@
+[project]
+name = "file_transcriber_mcp"
+version = "0.1.0"
+description = "file & download youtube trancriber via OpenAI Speech to Text API as MCP Sever"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "flask",
+    "PyJWT",
+    "python-dotenv",
+    "cryptography",
+    "python-jose",
+]

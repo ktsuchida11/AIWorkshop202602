@@ -9,7 +9,7 @@ HERE = os.path.dirname(__file__)
 APP_DIR = os.path.dirname(HERE)
 sys.path.insert(0, APP_DIR)
 
-import aws_llm.py_app.app as app
+import app
 
 
 def __make_fake_st():

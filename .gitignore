@@ -207,3 +207,16 @@ marimo/_lsp/
 __marimo__/
 data/
 
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Node.js
+node_modules/
+
+# Project-specific: databases
+db/*.sqlite3
+
+# Project-specific: agent-generated files
+filesystem/
+

@@ -14,19 +14,13 @@ from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 from openai import OpenAI
 
+from functools import wraps
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier  # , JWTVerifier
-import warnings
 
 from util import pretty_diarized_output
-
-# pydub が内部で `audioop` を import するため Python 3.13 で DeprecationWarning が出る。
-# テストやランタイムで不要な警告が出ないよう、import 時に該当の警告を抑制する。
-with warnings.catch_warnings():
-    # suppress pydub warnings that arise on newer Python versions
-    warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*audioop.*")
-    warnings.filterwarnings("ignore", category=SyntaxWarning)
-    from pydub import AudioSegment
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,24 +29,6 @@ load_dotenv()
 client = OpenAI()
 # OpenAI API キーは環境変数にセットしておくこと
 client.api_key = os.getenv("OPENAI_API_KEY")
-
-# -------------------------------------------------------------------
-# 1. JWT 設定（ここでは対称鍵 (HMAC) を使用する例）
-# -------------------------------------------------------------------
-# # クレーム	何を表すか	例
-# # iss	トークンを発行した主体	https://auth.myservice.com
-# # aud	トークンが使用される対象	https://api.myservice.com 或いは mcp-api
-
-# jwt_jwks_uri = "https://your-auth-system.com/.well-known/jwks.json"
-# jwt_issuer = "https://auth.myservice.com"
-# jwt_audience = "https://auth.myservice.com"
-
-# jwt_auth = JWTVerifier(
-#     jwks_uri=jwt_jwks_uri,
-#     issuer=jwt_issuer,
-#     audience=jwt_audience
-# )
-
 
 # ---------------------------------------------------
 # 1. StaticTokenVerifier の設定
@@ -78,6 +54,21 @@ static_auth = StaticTokenVerifier(
 )
 
 
+def require_scopes(*needed: str):
+    def deco(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            token = get_access_token()
+            scopes = set(token.scopes or []) if token else set()
+            missing = [s for s in needed if s not in scopes]
+            if missing:
+                # 403相当を意図
+                raise ToolError(f"Missing required scopes: {missing}")
+            return await fn(*args, **kwargs)
+        return wrapper
+    return deco
+
+
 # -------------------------------------------------------------------
 # 2. FastMCP サーバー生成
 # -------------------------------------------------------------------
@@ -85,59 +76,6 @@ static_auth = StaticTokenVerifier(
 mcp = FastMCP(name="YoutubeTranscribeMCP")
 # use static auth for development/tests
 mcp.auth = static_auth
-
-# In-memory job store for background transcriptions
-# job structure: {job_id: {status, progress, result, error}}
-_jobs = {}
-_jobs_lock = threading.Lock()
-
-
-def _run_transcription_job(job_id: str, url: str) -> None:
-    """Background worker that updates _jobs entry as it proceeds."""
-    try:
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "running"
-            _jobs[job_id]["progress"] = 0
-
-        # 1) download
-        with _jobs_lock:
-            _jobs[job_id]["stage"] = "download"
-            _jobs[job_id]["progress"] = 5
-
-        downloaded_file = download_audio_from_youtube(url)
-
-        with _jobs_lock:
-            _jobs[job_id]["progress"] = 50
-
-        # 2) transcribe
-        with _jobs_lock:
-            _jobs[job_id]["stage"] = "transcribe"
-        text = transcribe_audio(downloaded_file)
-
-        with _jobs_lock:
-            _jobs[job_id]["progress"] = 85
-
-        # 3) translate
-        with _jobs_lock:
-            _jobs[job_id]["stage"] = "translate"
-        translated = translate_text_to_japanese(text)
-
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "done"
-            _jobs[job_id]["progress"] = 100
-            _jobs[job_id]["result"] = translated
-            _jobs[job_id].pop("stage", None)
-    except Exception as e:
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"] = str(e)
-            _jobs[job_id]["progress"] = _jobs[job_id].get("progress", 0)
-
-
-def _run(cmd: list[str]) -> None:
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"Command failed (code={p.returncode}):\n{p.stderr.strip()}")
 
 
 def download_audio_from_youtube(url: str) -> List[str]:
@@ -183,6 +121,11 @@ def download_audio_from_youtube(url: str) -> List[str]:
     # チャンクは reset_timestamps して扱いやすくする
     chunk_dir = download_dir / f"chunks_{ts}"
     chunk_dir.mkdir(parents=True, exist_ok=True)
+
+    def _run(cmd: list[str]) -> None:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if p.returncode != 0:
+            raise RuntimeError(f"Command failed (code={p.returncode}):\n{p.stderr.strip()}")
 
     chunk_pattern = str(chunk_dir / "chunk_%03d.mp3")
     cmd = [
@@ -387,22 +330,12 @@ def translate_text_to_japanese(text: str) -> str:
 # -------------------------------------------------------------------
 # 3. MCP ツール定義（MCP のエンドポイント関数）
 # -------------------------------------------------------------------
-# @mcp.tool()
-# def transcribe_youtube_to_japanese_tool(url: str) -> str:
-#     """
-#     同期MCPツール:
-#     YouTubeのURLから音声をダウンロードし、
-#     文字起こしを行う
-#     """
-#     # 1) 音声抽出
-#     download_file = download_audio_from_youtube(url)
-#     # 2) 文字起こし
-#     text = transcribe_audio(download_file)
 
-#     return text
-
-
+# -------------------------------------------------------------------
+# 非同期　文字起こしツール
+# -------------------------------------------------------------------#
 @mcp.tool()
+@require_scopes("write:data")
 async def transcribe_youtube_to_japanese_async_tool(
     file_paths: Union[str, List[str]],
 ) -> List[Dict[str, Any]]:
@@ -461,72 +394,11 @@ async def transcribe_youtube_to_japanese_async_tool(
     # 処理後にファイル名順に並べ替え
     return sorted(results, key=lambda x: x["file"])
 
-
 # -------------------------------------------------------------------
-# 分離されたツール: ダウンロード / 文字起こし / 翻訳
-# 各処理について同期ツールと非同期ツールを公開する
-# -------------------------------------------------------------------
-
-# @mcp.tool()
-# def download_audio_from_youtube_tool(url: str) -> str:
-#     """
-#     同期ツール:
-#     指定されたYouTubeのURLから音声をダウンロードし、
-#     m4a形式のファイルパスを返します。
-#     このツールは文字起こしはしないです。
-#     """
-#     return download_audio_from_youtube(url)
-
-# @mcp.tool()
-# def transcribe_audio_tool(file_path: str) -> str:
-#     """
-#     同期ツール:
-#     指定された音声ファイルをOpenAIのSpeech-to-Textモデルを使用して文字起こしし、
-#     文字列として返します。
-#     """
-#     return transcribe_audio(file_path)
-
-# @mcp.tool()
-# def translate_text_to_japanese_tool(text: str) -> str:
-#     """
-#     同期ツール:
-#     指定されたテキストをOpenAIのChat Completionsを使用して
-#     日本語に翻訳し、翻訳結果を文字列として返します。
-#     """
-#     return translate_text_to_japanese(text)
-# @mcp.tool()
-# def transcribe_youtube_to_japanese_tool_diarize_tool(
-#     url: str,
-# ) -> Dict[str, Any]:
-#     """
-#     同期ツール: 指定した音声ファイルを話者分離付きで文字起こしし,
-#     `pretty_diarized_output` の出力（dict）を返します。
-#     """
-
-#     # 1) 音声抽出
-#     download_file = download_audio_from_youtube(url)
-
-#     # 2) 話者分離付き文字起こし
-#     diarized = transcribe_audio_diarize(
-#         download_file,
-#         language="ja",
-#         prompt=None,
-#         chunking_strategy="auto",
-#     )
-
-#     speaker_names = {
-#         "A": "話者A",
-#         "B": "話者B",
-#         "C": "話者C",
-#     }
-
-#     pretty = pretty_diarized_output(diarized, speaker_names=speaker_names)
-#     return pretty
-
-# -------------------------------------------------------------------
-# 話者分離付き文字起こしツール
+# 非同期　話者分離付き文字起こしツール
 # -------------------------------------------------------------------
 @mcp.tool()
+@require_scopes("write:data")
 async def transcribe_youtube_to_japanese_diarize_async_tool(
     file_paths: Union[str, List[str]],
 ) -> List[Dict[str, Any]]:
@@ -568,7 +440,6 @@ async def transcribe_youtube_to_japanese_diarize_async_tool(
           必要に応じて `speaker_names` を変更してください。
     """
     language = "ja"
-    prompt = None
     chunking_strategy = "auto"
     speaker_names = {
         "A": "話者A",
@@ -602,10 +473,11 @@ async def transcribe_youtube_to_japanese_diarize_async_tool(
 
 
 # -------------------------------------------------------------------
-# 非同期ジョブ API
+# 非同期　YouTube音声ダウンロードツール
 # -------------------------------------------------------------------
 
 @mcp.tool()
+@require_scopes("read:data")
 async def download_audio_from_youtube_async_tool(url: str) -> List[str]:
     """
     非同期ツール:
@@ -641,8 +513,11 @@ async def download_audio_from_youtube_async_tool(url: str) -> List[str]:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, download_audio_from_youtube, url)
 
-
+# -------------------------------------------------------------------
+# 非同期　日本語翻訳ツール
+# -------------------------------------------------------------------
 @mcp.tool()
+@require_scopes("write:data")
 async def translate_text_to_japanese_async_tool(text: str) -> str:
     """
     非同期ツール:

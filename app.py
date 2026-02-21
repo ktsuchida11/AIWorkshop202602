@@ -12,13 +12,14 @@ from dotenv import load_dotenv
 from task_agent.middleware_agent import middleware_agent
 from task_agent.structured_agent import structured_agent, MarketAnalysisReport
 from task_agent.deep_agent import create_origin_deep_agent
+from langchain.agents.middleware._redaction import PIIDetectionError
 
 
 def render_market_report_markdown(report_obj: dict) -> str:
     """MarketAnalysisReport(dict or model) -> Markdown string"""
     try:
         if isinstance(report_obj, dict):
-            report = MarketAnalysisReport.parse_obj(report_obj)
+            report = MarketAnalysisReport.model_validate(report_obj)
         else:
             report = report_obj
     except Exception:
@@ -228,64 +229,78 @@ async def run_agent(input_messages: List[HumanMessage]):
     # state をストリーム (values モード)
     # 各ステップで state 全体が step に入る
     with st.spinner("処理中...", show_time=True):
-        async for step in agent.astream(
-            {"messages": input_messages},
-            config=config,
-            stream_mode="values",
-        ):
-            # ここで step は「グラフの状態 (dict)」
-            # 例: {"messages": [...], "remaining_steps": ..., "__interrupt__": ...}
-            logger.info(
-                "[run_agent] step received (keys=%s)",
-                list(step.keys()),
-            )
 
-            last_state = step
-
-            # 1. Human-in-the-loop (__interrupt__) があるか？
-            # middleware で設定しているので、ここで interrupt 情報が入る
-            # interrupt があれば承認待ちにして UI を切り替え
-            if "__interrupt__" in step and step["__interrupt__"]:
-                # 共通処理へ委譲
-                handled = process_hitl_interrupt(step)
-                if handled:
-                    # interrupt した時点で一旦終了 → Streamlit に UI 切り替えさせる
-                    break
-
-            # 2. 通常ステップの場合はとくに何もしない（last_state にだけ保存）
-            #    ログだけ少し詳しめに
-            if "messages" in step:
-                logger.info("[run_agent] messages in step: %d messages", len(step["messages"]))
-                msgs = step["messages"]
-                if msgs:
-                    last_msg = msgs[-1]
-                    # AI の途中結果があればログだけ取っておく
-                    if isinstance(last_msg, AIMessage):
-                        logger.info(
-                            "[run_agent] intermediate AIMessage: %s",
-                            repr(last_msg.content)[:200],
-                        )
-
-            # Continue to next step...
-            if "structured_response" in step:
+        try:
+            async for step in agent.astream(
+                {"messages": input_messages},
+                config=config,
+                stream_mode="values",
+            ):
+                # ここで step は「グラフの状態 (dict)」
+                # 例: {"messages": [...], "remaining_steps": ..., "__interrupt__": ...}
                 logger.info(
-                    "[run_agent] structured_response=%s",
-                    repr(step["structured_response"]),
+                    "[run_agent] step received (keys=%s)",
+                    list(step.keys()),
                 )
-                if step["structured_response"] is not None:
-                    # レスポンスを MarketAnalysisReport としてパースし、HTML にレンダリングして即座に表示
-                    try:
-                        sr = step["structured_response"]
-                        # sr が dict の場合はそのまま受け取る
-                        md_body = render_market_report_markdown(sr)
-                        st.session_state.messages.append({"role": "assistant", "content": md_body})
-                        st.session_state.final_result = md_body
-                        # 表示更新のため rerun
-                        logger.info("[run_agent] rendered structured_response and appended to session messages")
-                        st.rerun()
-                        return
-                    except Exception as e:
-                        logger.exception("Failed to render structured_response: %s", e)
+
+                last_state = step
+
+                # 1. Human-in-the-loop (__interrupt__) があるか？
+                # middleware で設定しているので、ここで interrupt 情報が入る
+                # interrupt があれば承認待ちにして UI を切り替え
+                if "__interrupt__" in step and step["__interrupt__"]:
+                    # 共通処理へ委譲
+                    handled = process_hitl_interrupt(step)
+                    if handled:
+                        # interrupt した時点で一旦終了 → Streamlit に UI 切り替えさせる
+                        break
+
+                # 2. 通常ステップの場合はとくに何もしない（last_state にだけ保存）
+                #    ログだけ少し詳しめに
+                if "messages" in step:
+                    logger.info("[run_agent] messages in step: %d messages", len(step["messages"]))
+                    msgs = step["messages"]
+                    if msgs:
+                        last_msg = msgs[-1]
+                        # AI の途中結果があればログだけ取っておく
+                        if isinstance(last_msg, AIMessage):
+                            logger.info(
+                                "[run_agent] intermediate AIMessage: %s",
+                                repr(last_msg.content)[:200],
+                            )
+
+                # Continue to next step...
+                if "structured_response" in step:
+                    logger.info(
+                        "[run_agent] structured_response=%s",
+                        repr(step["structured_response"]),
+                    )
+                    if step["structured_response"] is not None:
+                        # レスポンスを MarketAnalysisReport としてパースし、HTML にレンダリングして即座に表示
+                        try:
+                            sr = step["structured_response"]
+                            # sr が dict の場合はそのまま受け取る
+                            md_body = render_market_report_markdown(sr)
+                            st.session_state.messages.append({"role": "assistant", "content": md_body})
+                            st.session_state.final_result = md_body
+                            # 表示更新のため rerun
+                            logger.info("[run_agent] rendered structured_response and appended to session messages")
+                            st.rerun()
+                            return
+                        except Exception as e:
+                            logger.exception("Failed to render structured_response: %s", e)
+        # PII 検出エラーのキャッチ
+        except PIIDetectionError as e:
+           # ユーザーへは「機密情報（APIキー等）が含まれているため処理を中断しました」と返すと親切です
+            logger.error(f"⚠️ セキュリティ・ポリシー違反を検知しました: {e}")
+            last_msg = "機密情報（APIキー等）が含まれているため処理を中断しました"
+            st.session_state.messages.append(
+                {"role": "assistant", "content": last_msg}
+            )
+            st.rerun()
+            return
+   
+
 
     # ===== ここからループ終了後の処理 =====
 
@@ -327,7 +342,7 @@ async def run_agent(input_messages: List[HumanMessage]):
             last_state["messages"],
         )
         st.session_state.messages.append(
-            {"role": "assistant", "content": "エラーが発生しました。AI の応答が見つかりませんでした。"}
+            {"role": "assistant", "content": f"エラーが発生しました。AI の応答が見つかりませんでした。：{last_state['messages']}"}
         )
         st.rerun()
         return

@@ -1,6 +1,0 @@
-{
-  "public": ".",
-  "rewrites": [
-    { "source": "/k-okoshi/**", "destination": "/k-okoshi/index.html" }
-  ]
-}

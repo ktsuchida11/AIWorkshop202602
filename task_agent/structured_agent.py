@@ -30,34 +30,34 @@ custom_profile = {
 
 class SourceRef(BaseModel):
     doc_id: str = Field(..., description="RAGに登録されたドキュメントID")
-    url: Optional[str]
-    resource: Optional[str]  # "minutes" | "press"
-    published_filename: Optional[str]
+    url: Optional[str] = None
+    resource: Optional[str] = None  # "minutes" | "press"
+    published_filename: Optional[str] = None
 
 
 class MarketInstrument(BaseModel):
     name: str
-    ticker: Optional[str]
-    instrument_type: Optional[str]  # e.g., "JPY-Bond", "Equity", "FX"
-    price: Optional[float]
-    change_abs: Optional[float]
-    change_pct: Optional[float]
-    timestamp: Optional[str]  # ISO8601
-    data_source: Optional[str]
+    ticker: Optional[str] = None
+    instrument_type: Optional[str] = None  # e.g., "JPY-Bond", "Equity", "FX"
+    price: Optional[float] = None
+    change_abs: Optional[float] = None
+    change_pct: Optional[float] = None
+    timestamp: Optional[str] = None  # ISO8601
+    data_source: Optional[str] = None
 
 
 class Finding(BaseModel):
     title: str
     detail: str
-    severity: Optional[Literal["low","medium","high"]]
-    confidence: Optional[float]  # 0..1
+    severity: Optional[Literal["low","medium","high"]] = None
+    confidence: Optional[float] = None  # 0..1
 
 
 class MarketAnalysisReport(BaseModel):
     report_id: str
-    meeting_date: Optional[str]  # 例: "2025-12-01"（会合日）
+    meeting_date: Optional[str] = None  # 例: "2025-12-01"（会合日）
     created_at: str  # JST ISO8601 (必須)
-    author: Optional[str]
+    author: Optional[str] = None
 
     # High-level
     summary: str
@@ -67,20 +67,20 @@ class MarketAnalysisReport(BaseModel):
     market_snapshot: List[MarketInstrument]
 
     # Time-series/visuals: list of URLs or filepaths for charts
-    charts: Optional[List[str]]
+    charts: Optional[List[str]] = None
 
     # Recommendations / action items
-    recommendations: Optional[List[str]]
+    recommendations: Optional[List[str]] = None
 
     # Backing sources: BOJ doc ids, press, and external sources
     sources: List[SourceRef]
 
     # Raw extracted items for traceability (optional)
-    raw_text_snippets: Optional[List[str]]
+    raw_text_snippets: Optional[List[str]] = None
 
     # Confidence and notes on missing data or failures
-    overall_confidence: Optional[float]
-    notes: Optional[str]
+    overall_confidence: Optional[float] = None
+    notes: Optional[str] = None
 
 
 # システムプロンプト
@@ -93,6 +93,9 @@ system_prompt = """
   * Web検索が拒否された場合、Web検索を中止してレポート作成してください。
   * レポート保存を拒否された場合、レポート作成を中止し、内容をユーザーに直接伝えて下さい。
 """
+
+# 2024年の日銀のレポート情報を取得してください。
+# 2024年の12月のレポートの内容と、その当時の為替レートの変動をしらべて表示してください
 
 
 async def create_structured_agent(model_id: str = "anthropic"):

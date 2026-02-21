@@ -5,7 +5,7 @@ services:
     build:
       context: ./tools/postgres_container
     ports:
-      - "35432:5432"
+      - "127.0.0.1:35432:5432"
     volumes:
       - ./tools/postgres_container/data:/var/lib/postgresql/data
       - ./tools/postgres_container/init:/docker-entrypoint-initdb.d
@@ -20,7 +20,7 @@ services:
       dockerfile: Dockerfile
     container_name: youtube-transcribe-mcp
     ports:
-      - "3333:3333"
+      - "127.0.0.1:3333:3333"
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       DOWNLOAD_DIR: /app/downloads
@@ -28,4 +28,47 @@ services:
       - ./downloads:/app/downloads
     depends_on:
       - postgres
+    restart: unless-stopped
+  jwt-server:
+    build:
+      context: ./tools/jwt_server
+      dockerfile: Dockerfile
+    container_name: jwt-server
+    ports:
+      - "127.0.0.1:4444:4444"
+    environment:
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+    restart: unless-stopped
+  indicator:
+    build:
+      context: ./tools/indicator
+      dockerfile: Dockerfile
+    container_name: indicator-mcp
+    ports:
+      - "127.0.0.1:5555:5555"
+    environment:
+      FMP_API_KEY: ${FMP_API_KEY}
+      JWT_JWKS_URI: http://jwt-server:4444/.well-known/jwks.json
+      JWT_ISSUER: http://localhost:4444
+      JWT_AUDIENCE: your-mcp-server
+    depends_on:
+      - jwt-server
+    restart: unless-stopped
+  news-search:
+    build:
+      context: ./tools/news_search
+      dockerfile: Dockerfile
+    container_name: news-search-mcp
+    ports:
+      - "127.0.0.1:7666:7666"
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      NEWS_API_KEY: ${NEWS_API_KEY}
+      BASE_URL: ${BASE_URL:-http://localhost:7666}
+      HOST: "0.0.0.0"
+      PORT: "7666"
+      LOG_LEVEL: "INFO"
+    volumes:
+      - ./tools/news_search/data:/root/.local/share/fastmcp
     restart: unless-stopped

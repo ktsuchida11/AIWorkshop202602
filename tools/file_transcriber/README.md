@@ -145,7 +145,7 @@ Transport: streamable-http
 ターミナルで以下を実行します。
 
 ```bash
-npx @modelcontextprotocol/inspector
+npx @modelcontextprotocol/inspector@latest
 ```
 
 実行後、自動的にブラウザが起動します。

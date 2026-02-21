@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+import httpx
 from langchain_openai import ChatOpenAI
 from langchain_aws import ChatBedrock
 from langchain.chat_models import init_chat_model
@@ -11,7 +12,9 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from langgraph.checkpoint.memory import MemorySaver  # short-termは今回はメモリでOK
 from langgraph.store.postgres import PostgresStore
-from psycopg import Connection
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver # short-term永続化用
+from psycopg import Connection, AsyncConnection
+from psycopg.rows import dict_row
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
@@ -87,6 +90,20 @@ if getattr(store, "start_ttl_sweeper", None):
         logger.debug("PostgresStore TTL sweeper could not be started", exc_info=True)
 
 
+async def _fetch_jwt_token() -> str:
+    """JWT サーバからアクセストークンを取得する"""
+    jwt_server_url = os.environ.get("JWT_SERVER_URL", "http://localhost:4444")
+    username = os.environ.get("JWT_USERNAME", "alice")
+    password = os.environ.get("JWT_PASSWORD", "password123")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{jwt_server_url}/login",
+            json={"username": username, "password": password},
+        )
+        response.raise_for_status()
+        return response.json()["token"]
+
+
 async def create_origin_deep_agent(model_id: str = "anthropic", assistant_id: str = None):
     # テンプレートに今日の日付を埋め込む
     today = datetime.now().strftime("%Y-%m-%d")
@@ -120,6 +137,9 @@ async def create_origin_deep_agent(model_id: str = "anthropic", assistant_id: st
 
         print(f"Using Bedrock model: {model_id}")
 
+    jwt_token = await _fetch_jwt_token()
+    logger.info("JWT token acquired for indicator MCP server")
+
     client = MultiServerMCPClient(
         {
             "boj-minutes-rag": {
@@ -145,6 +165,29 @@ async def create_origin_deep_agent(model_id: str = "anthropic", assistant_id: st
                 #    例：10分チャンク×6=60分 + 余裕 => 80分など
                 "sse_read_timeout": timedelta(minutes=80),
             },
+            # --- HTTP MCP with JWT Bearer token ---
+            "indicator": {
+                "transport": "http",
+                "url": "http://localhost:5555/mcp",
+                "headers": {
+                    "Authorization": f"Bearer {jwt_token}",
+                },
+                "timeout": timedelta(seconds=30),
+                "sse_read_timeout": timedelta(minutes=5),
+            },
+            # --- HTTP MCP with Google OAuth2.0 ---
+            "news-search": {
+                "transport": "http",
+                "url": "http://localhost:7666/mcp",
+                "oauth": {
+                    "provider": "google",
+                    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+                    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+                    "scopes": ["openid", "email", "profile"],
+                },
+                "timeout": timedelta(seconds=30),
+                "sse_read_timeout": timedelta(minutes=5),
+            },
         }
     )
 
@@ -156,10 +199,14 @@ async def create_origin_deep_agent(model_id: str = "anthropic", assistant_id: st
 
     tools = mcp_tools + local_tools
 
+    async_conn = await AsyncConnection.connect(DATABASE_URL, autocommit=True, prepare_threshold=0, row_factory=dict_row)
+    checkpointer = AsyncPostgresSaver(async_conn)
+    await checkpointer.setup()
+
     agent = create_deep_agent(
             model=model,
             tools=tools,
-            checkpointer=MemorySaver(),  # Required for HumanInTheLoopMiddleware
+            checkpointer=checkpointer,  # Required for HumanInTheLoopMiddleware
             store=store,
             backend=lambda rt: CompositeBackend(
                 default=StateBackend(rt),
